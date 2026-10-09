@@ -26,6 +26,8 @@ search_vk = get_vk_session()
 
 user_candidates = {}
 current_candidates = {}
+candidate_history = {}
+candidate_positions = {}
 waiting_for_age = {}
 
 
@@ -42,18 +44,20 @@ def send_message(user_id, message, attachment=None):
     vk.messages.send(**params)
 
 
-def show_candidate(user_id):
+def show_candidate(user_id, candidate=None):
     candidates = user_candidates.get(user_id, [])
 
-    if not candidates:
-        current_candidates.pop(user_id, None)
-        send_message(
-            user_id,
-            "Анкеты закончились. Напиши «поиск», " "чтобы выполнить новый поиск.",
-        )
-        return
+    if candidate is None:
+        if not candidates:
+            current_candidates.pop(user_id, None)
+            send_message(
+                user_id,
+                "Анкеты закончились. Напиши «поиск», "
+                "чтобы выполнить новый поиск.",
+            )
+            return
 
-    candidate = candidates.pop(0)
+        candidate = candidates.pop(0)
 
     candidate_vk_id = candidate["id"]
     first_name = candidate.get("first_name", "")
@@ -69,6 +73,12 @@ def show_candidate(user_id):
     )
 
     current_candidates[user_id] = candidate_id
+    history = candidate_history.setdefault(user_id, [])
+    if not any(item["id"] == candidate_vk_id for item in history):
+        history.append(candidate)
+    candidate_positions[user_id] = next(
+        i for i, item in enumerate(history) if item["id"] == candidate_vk_id
+    )
 
     photos = get_top_photos(
         search_vk,
@@ -91,6 +101,7 @@ def show_candidate(user_id):
         f"{profile_url}\n\n"
         "Напиши:\n"
         "«следующая» — следующая анкета\n"
+        "«предыдущая» — предыдущая анкета\n"
         "«в избранное» — добавить в избранное"
     )
 
@@ -100,6 +111,8 @@ def show_candidate(user_id):
 def perform_search(user_id, age, user):
     user_candidates.pop(user_id, None)
     current_candidates.pop(user_id, None)
+    candidate_history.pop(user_id, None)
+    candidate_positions.pop(user_id, None)
 
     sex = user.get("sex")
 
@@ -149,6 +162,8 @@ def start_search(user_id):
     waiting_for_age.pop(user_id, None)
     user_candidates.pop(user_id, None)
     current_candidates.pop(user_id, None)
+    candidate_history.pop(user_id, None)
+    candidate_positions.pop(user_id, None)
 
     user = get_user_info(
         search_vk,
@@ -223,6 +238,7 @@ def handle_message(user_id, text):
             "Доступные команды:\n"
             "«поиск» — найти подходящую анкету\n"
             "«следующая» — показать следующую\n"
+            "«предыдущая» — вернуться к предыдущей\n"
             "«в избранное» — сохранить анкету\n"
             "«избранное» — показать сохранённые анкеты",
         )
@@ -263,7 +279,24 @@ def handle_message(user_id, text):
         return
 
     if text == "следующая":
-        show_candidate(user_id)
+        history = candidate_history.get(user_id, [])
+        position = candidate_positions.get(user_id, -1)
+        if position + 1 < len(history):
+            show_candidate(user_id, history[position + 1])
+            candidate_positions[user_id] = position + 1
+        elif user_candidates.get(user_id):
+            show_candidate(user_id)
+        else:
+            send_message(user_id, "Анкеты закончились. Напиши «поиск».")
+
+    elif text == "предыдущая":
+        history = candidate_history.get(user_id, [])
+        position = candidate_positions.get(user_id, -1)
+        if position > 0:
+            show_candidate(user_id, history[position - 1])
+            candidate_positions[user_id] = position - 1
+        else:
+            send_message(user_id, "Предыдущей анкеты пока нет.")
 
     elif text == "в избранное":
         candidate_id = current_candidates.get(user_id)
