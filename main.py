@@ -52,8 +52,7 @@ def show_candidate(user_id, candidate=None):
             current_candidates.pop(user_id, None)
             send_message(
                 user_id,
-                "Анкеты закончились. Напиши «поиск», "
-                "чтобы выполнить новый поиск.",
+                "Анкеты закончились. Напиши «поиск», " "чтобы выполнить новый поиск.",
             )
             return
 
