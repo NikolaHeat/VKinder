@@ -30,18 +30,23 @@ waiting_for_age = {}
 
 
 def send_message(user_id, message, attachment=None):
-    vk.messages.send(
-        user_id=user_id,
-        message=message,
-        random_id=random.randint(1, 2_147_483_647),
-        attachment=attachment,
-    )
+    params = {
+        "user_id": user_id,
+        "message": message,
+        "random_id": random.randint(1, 2_147_483_647),
+    }
+
+    if attachment:
+        params["attachment"] = attachment
+
+    vk.messages.send(**params)
 
 
 def show_candidate(user_id):
     candidates = user_candidates.get(user_id, [])
 
     if not candidates:
+        current_candidates.pop(user_id, None)
         send_message(
             user_id,
             "Анкеты закончились. Напиши «поиск», " "чтобы выполнить новый поиск.",
@@ -51,21 +56,33 @@ def show_candidate(user_id):
     candidate = candidates.pop(0)
 
     candidate_vk_id = candidate["id"]
-    first_name = candidate["first_name"]
-    last_name = candidate["last_name"]
+    first_name = candidate.get("first_name", "")
+    last_name = candidate.get("last_name", "")
 
     profile_url = f"https://vk.com/id{candidate_vk_id}"
 
-    candidate_id = add_candidate(candidate_vk_id, first_name, last_name, profile_url)
+    candidate_id = add_candidate(
+        candidate_vk_id,
+        first_name,
+        last_name,
+        profile_url,
+    )
 
     current_candidates[user_id] = candidate_id
 
-    photos = get_top_photos(search_vk, candidate_vk_id)
+    photos = get_top_photos(
+        search_vk,
+        candidate_vk_id,
+    )
 
     attachments = []
 
     for photo in photos:
-        attachments.append(f"photo{photo['owner_id']}_{photo['id']}")
+        owner_id = photo.get("owner_id")
+        photo_id = photo.get("id")
+
+        if owner_id is not None and photo_id is not None:
+            attachments.append(f"photo{owner_id}_{photo_id}")
 
     attachment = ",".join(attachments)
 
@@ -77,51 +94,84 @@ def show_candidate(user_id):
         "«в избранное» — добавить в избранное"
     )
 
-    send_message(user_id, message, attachment if attachment else None)
+    send_message(user_id, message, attachment)
 
 
 def perform_search(user_id, age, user):
+    user_candidates.pop(user_id, None)
+    current_candidates.pop(user_id, None)
+
     sex = user.get("sex")
 
     if sex not in (1, 2):
-        send_message(user_id, "В профиле не указан пол.")
+        send_message(
+            user_id,
+            "В профиле не указан пол.",
+        )
         return
 
     city = user.get("city")
 
-    if not city:
-        send_message(user_id, "В профиле не указан город.")
+    if not city or not city.get("id"):
+        send_message(
+            user_id,
+            "В профиле не указан город.",
+        )
         return
 
     city_id = city["id"]
 
-    candidates = search_users(search_vk, age, sex, city_id)
+    candidates = search_users(
+        search_vk,
+        age,
+        sex,
+        city_id,
+    )
 
     if not candidates:
-        send_message(user_id, "Подходящих открытых анкет не найдено.")
+        send_message(
+            user_id,
+            "Подходящих открытых анкет не найдено.",
+        )
         return
 
     user_candidates[user_id] = candidates
 
-    send_message(user_id, f"Нашёл подходящие анкеты: {len(candidates)}.")
+    send_message(
+        user_id,
+        f"Нашёл подходящие анкеты: {len(candidates)}.",
+    )
 
     show_candidate(user_id)
 
 
 def start_search(user_id):
-    user = get_user_info(search_vk, user_id)
+    waiting_for_age.pop(user_id, None)
+    user_candidates.pop(user_id, None)
+    current_candidates.pop(user_id, None)
+
+    user = get_user_info(
+        search_vk,
+        user_id,
+    )
 
     if user is None:
-        send_message(user_id, "Не удалось получить информацию о профиле.")
+        send_message(
+            user_id,
+            "Не удалось получить информацию о профиле.",
+        )
         return
 
     first_name = user.get("first_name", "")
     last_name = user.get("last_name", "")
 
-    add_user(user_id, first_name, last_name)
+    add_user(
+        user_id,
+        first_name,
+        last_name,
+    )
 
-    bdate = user.get("bdate")
-    age = calculate_age(bdate)
+    age = calculate_age(user.get("bdate"))
 
     if age is None:
         waiting_for_age[user_id] = user
@@ -133,44 +183,40 @@ def start_search(user_id):
         )
         return
 
-    perform_search(user_id, age, user)
+    perform_search(
+        user_id,
+        age,
+        user,
+    )
 
 
 def show_favorites(user_id):
     favorites = get_favorites(user_id)
 
     if not favorites:
-        send_message(user_id, "В избранном пока ничего нет.")
+        send_message(
+            user_id,
+            "В избранном пока ничего нет.",
+        )
         return
 
-    lines = ["Твоё избранное:\n"]
+    lines = ["Твоё избранное:"]
 
     for first_name, last_name, profile_url in favorites:
         lines.append(f"{first_name} {last_name}\n{profile_url}")
 
-    send_message(user_id, "\n\n".join(lines))
+    send_message(
+        user_id,
+        "\n\n".join(lines),
+    )
 
 
 def handle_message(user_id, text):
     text = text.lower().strip()
 
-    if user_id in waiting_for_age:
-        if not text.isdigit():
-            send_message(user_id, "Возраст нужно написать цифрами. " "Например: 27")
-            return
-
-        age = int(text)
-
-        if age < 18 or age > 100:
-            send_message(user_id, "Укажи возраст от 18 до 100 лет.")
-            return
-
-        user = waiting_for_age.pop(user_id)
-
-        perform_search(user_id, age, user)
-        return
-
     if text in ("начать", "start", "привет"):
+        waiting_for_age.pop(user_id, None)
+
         send_message(
             user_id,
             "Привет! Я VKinder.\n\n"
@@ -180,29 +226,70 @@ def handle_message(user_id, text):
             "«в избранное» — сохранить анкету\n"
             "«избранное» — показать сохранённые анкеты",
         )
+        return
 
-    elif text == "поиск":
+    if text == "поиск":
         start_search(user_id)
+        return
 
-    elif text == "следующая":
+    if text == "избранное":
+        show_favorites(user_id)
+        return
+
+    if user_id in waiting_for_age:
+        if not text.isdigit():
+            send_message(
+                user_id,
+                "Возраст нужно написать цифрами. " "Например: 27",
+            )
+            return
+
+        age = int(text)
+
+        if not 18 <= age <= 100:
+            send_message(
+                user_id,
+                "Укажи возраст от 18 до 100 лет.",
+            )
+            return
+
+        user = waiting_for_age.pop(user_id)
+
+        perform_search(
+            user_id,
+            age,
+            user,
+        )
+        return
+
+    if text == "следующая":
         show_candidate(user_id)
 
     elif text == "в избранное":
         candidate_id = current_candidates.get(user_id)
 
         if candidate_id is None:
-            send_message(user_id, "Сначала выполни поиск анкеты.")
+            send_message(
+                user_id,
+                "Сначала выполни поиск анкеты.",
+            )
             return
 
-        added = add_to_favorites(user_id, candidate_id)
+        added = add_to_favorites(
+            user_id,
+            candidate_id,
+        )
 
         if added:
-            send_message(user_id, "Анкета добавлена в избранное ❤️")
+            send_message(
+                user_id,
+                "Анкета добавлена в избранное ❤️",
+            )
         else:
-            send_message(user_id, "Не удалось добавить анкету.")
-
-    elif text == "избранное":
-        show_favorites(user_id)
+            send_message(
+                user_id,
+                "Не удалось добавить анкету.",
+            )
 
     else:
         send_message(
@@ -216,7 +303,10 @@ def main():
 
     for event in longpoll.listen():
         if event.type == VkEventType.MESSAGE_NEW and event.to_me:
-            handle_message(event.user_id, event.text)
+            handle_message(
+                event.user_id,
+                event.text,
+            )
 
 
 if __name__ == "__main__":

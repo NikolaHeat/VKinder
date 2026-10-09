@@ -1,46 +1,54 @@
-import os
 from datetime import datetime, timezone
 
 import vk_api
-from dotenv import load_dotenv
+from vk_api.exceptions import ApiError
 
-load_dotenv()
-
-USER_TOKEN = os.getenv("USER_TOKEN")
+from config import USER_TOKEN
 
 
 def get_vk_session():
+    if not USER_TOKEN:
+        raise ValueError("USER_TOKEN не найден в файле .env")
+
     vk_session = vk_api.VkApi(token=USER_TOKEN)
     return vk_session.get_api()
 
 
 def get_user_info(vk, user_id):
-    users = vk.users.get(
-        user_ids=user_id,
-        fields="sex,bdate,city",
-    )
+    try:
+        users = vk.users.get(
+            user_ids=user_id,
+            fields="sex,bdate,city",
+        )
 
-    if not users:
+        if not users:
+            return None
+
+        return users[0]
+
+    except (ApiError, KeyError, TypeError) as error:
+        print(f"Ошибка получения пользователя: {error}")
         return None
-
-    return users[0]
 
 
 def calculate_age(bdate):
     if not bdate:
         return None
 
-    parts = bdate.split(".")
+    try:
+        birth_date = (
+            datetime.strptime(
+                bdate,
+                "%d.%m.%Y",
+            )
+            .replace(tzinfo=timezone.utc)
+            .date()
+        )
 
-    if len(parts) != 3:
+    except (ValueError, TypeError):
         return None
 
-    birth_date = datetime.strptime(
-        bdate,
-        "%d.%m.%Y",
-    ).replace(tzinfo=timezone.utc)
-
-    today = datetime.now(timezone.utc)
+    today = datetime.now(timezone.utc).date()
 
     age = today.year - birth_date.year
 
@@ -50,31 +58,38 @@ def calculate_age(bdate):
     ):
         age -= 1
 
+    if age < 18 or age > 100:
+        return None
+
     return age
 
 
 def search_users(vk, age, sex, city_id, count=20):
-    # Ищем противоположный пол
     search_sex = 1 if sex == 2 else 2
 
-    result = vk.users.search(
-        age_from=age,
-        age_to=age,
-        sex=search_sex,
-        city=city_id,
-        status=6,
-        has_photo=1,
-        count=count,
-        fields="city,bdate,sex",
-    )
+    try:
+        result = vk.users.search(
+            age_from=age,
+            age_to=age,
+            sex=search_sex,
+            city=city_id,
+            status=6,
+            has_photo=1,
+            count=count,
+            fields="city,bdate,sex",
+        )
 
-    users = []
+        users = []
 
-    for user in result["items"]:
-        if not user.get("is_closed", True):
-            users.append(user)
+        for user in result.get("items", []):
+            if not user.get("is_closed", True):
+                users.append(user)
 
-    return users
+        return users
+
+    except (ApiError, KeyError, TypeError) as error:
+        print(f"Ошибка поиска пользователей: {error}")
+        return []
 
 
 def get_top_photos(vk, user_id):
@@ -85,19 +100,33 @@ def get_top_photos(vk, user_id):
             extended=1,
             count=100,
         )
-    except vk_api.exceptions.ApiError:
+
+        photos_list = photos.get("items", [])
+
+        photos_list.sort(
+            key=lambda photo: (photo.get("likes") or {}).get("count", 0),
+            reverse=True,
+        )
+
+        return photos_list[:3]
+
+    except (ApiError, KeyError, TypeError) as error:
+        print(f"Ошибка получения фотографий: {error}")
         return []
-
-    photos_list = photos["items"]
-
-    photos_list.sort(
-        key=lambda photo: photo["likes"]["count"],
-        reverse=True,
-    )
-
-    return photos_list[:3]
 
 
 if __name__ == "__main__":
-    vk = get_vk_session()
-    print("Подключение к VK API успешно!")
+    try:
+        vk = get_vk_session()
+        user = vk.users.get()
+
+        print("Подключение к VK API успешно!")
+
+        if user:
+            print(
+                "Пользователь:",
+                user[0].get("first_name", ""),
+            )
+
+    except ApiError as error:
+        print(f"Ошибка авторизации VK: {error}")
